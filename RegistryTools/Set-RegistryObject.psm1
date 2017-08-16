@@ -179,9 +179,31 @@ Function CompareRegValueHelper {
             $propertyName = Split-Path $RegObjProperty -Leaf
             
             # Get the current value of the registry property.
-            $currentValue = Get-ItemProperty -Path $regPath -Name $propertyName | Select-Object -ExpandProperty $propertyName
+            $currentValue = Get-ItemProperty -Path $regPath -Name $propertyName -ErrorAction SilentlyContinue | 
+                Select-Object -ExpandProperty $propertyName
 
-            if (@(Compare-Object -ReferenceObject $currentValue -DifferenceObject $RegistryObject.$RegObjProperty).count -eq 0) {
+            # Capture registry errors on update or creation.
+            $registryErrors = ""
+
+            if ($null -eq $currentValue) {
+
+                Write-Verbose "$RegObjProperty property does not exist, and will be created."
+
+                $confirmMessage = "Create $regPath with value `"$($RegistryObject.$RegObjProperty)`""
+
+                # Confirm creating the registry key value.
+                if ($PSCmdlet.ShouldContinue("New-ItemProperty",$confirmMessage,[ref]$yesToAll,[ref]$noToAll)) {
+
+                    # Add a remove line to the backup file.
+                    $output.RestoreCommands += "Remove-ItemProperty -Path $regPath -Name $propertyName -Force"
+
+                    New-ItemProperty -Path $regPath -Name $propertyName -Value $RegistryObject.$RegObjProperty -Force:$Force -ErrorVariable registryErrors
+
+                    # Add the created registry key to the output.
+                    $output.UpdatedKeys += @{$RegObjProperty = $($RegistryObject.$RegObjProperty)}
+                }
+
+            } elseif (@(Compare-Object -ReferenceObject $currentValue -DifferenceObject $RegistryObject.$RegObjProperty).count -eq 0) {
                 Write-Verbose "$RegObjProperty property is the same, no update necessary."
             } else {
 
@@ -195,42 +217,39 @@ Function CompareRegValueHelper {
                     # Add the restore line to the backup file.
                     $output.RestoreCommands += "Set-ItemProperty -Path $regPath -Name $propertyName -Value `"$currentValue`"`n`n"
 
-                    # Clear the error catcher.
-                    $registryErrors = $null
-
                     Set-ItemProperty -Path $regPath -Name $propertyName -Value $RegistryObject.$RegObjProperty -Force:$Force -ErrorVariable registryErrors
 
                     # Add the registry key update to the output.
                     $output.UpdatedKeys += @{$RegObjProperty = $($RegistryObject.$RegObjProperty)}
 
-                    # Check if errors occured during registry update.
-                    if ($registryErrors.count -gt 0) {
-
-                        # Process each error.
-                        foreach ($err in $registryErrors) {
-                            
-                            # Perform the checks on whether to continue or stop attempting to update
-                            $permissionDenied = $err.CategoryInfo.Category -eq "PermissionDenied"
-                            $permDeniedshouldContinue = $PSCmdlet.ShouldContinue("Set-ItemProperty","Unable to update registry key(PermissionDenied), continue updating other registry keys?",[ref]$permYesToAll,[ref]$permNoToAll)
-                            
-                            # Check if error is "PermissionDenied" and the user wants to continue.
-                            if ($permissionDenied -and $permDeniedshouldContinue) {
-                                
-                                Write-Verbose "Continuing to update registry keys after receiving `"PermissionDenied`" error."
-                            
-                            } else {
-                                
-
-                                $continue = $false
-
-                                return # exit the function
-                            } # If: ShouldContinue - PermissionDenied
-
-                        } # Foreach: registryErrors
-
-                    } # If: RegistryError > 0
-
                 } # If: ShouldContinue - Update Registry
+
+                # Check if errors occured during registry update.
+                if ($registryErrors.count -gt 0) {
+
+                    # Process each error.
+                    foreach ($err in $registryErrors) {
+                        
+                        # Perform the checks on whether to continue or stop attempting to update
+                        $permissionDenied = $err.CategoryInfo.Category -eq "PermissionDenied"
+                        $permDeniedshouldContinue = $PSCmdlet.ShouldContinue("Set-ItemProperty","Unable to update registry key(PermissionDenied), continue updating other registry keys?",[ref]$permYesToAll,[ref]$permNoToAll)
+                        
+                        # Check if error is "PermissionDenied" and the user wants to continue.
+                        if ($permissionDenied -and $permDeniedshouldContinue) {
+                            
+                            Write-Verbose "Continuing to update registry keys after receiving `"PermissionDenied`" error."
+                        
+                        } else {
+                            
+
+                            $continue = $false
+
+                            return # exit the function
+                        } # If: ShouldContinue - PermissionDenied
+
+                    } # Foreach: registryErrors
+
+                } # If: RegistryError > 0
 
             } # Else: Values are 
 

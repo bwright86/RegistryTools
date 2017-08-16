@@ -35,6 +35,7 @@ function ConvertFrom-Registry {
                ValueFromPipeline=$true,
                ValueFromPipelineByPropertyName=$true)]
     [Alias("PSPath")]
+    [string]
     $Path,
     # Number of levels to retrieve properties from. Default = 3
     [int]
@@ -43,6 +44,8 @@ function ConvertFrom-Registry {
     [int]
     $MaxSubKeys = 10
     )
+
+    Write-Verbose "Path given: $Path"
 
     # Retrieve the item from the path given.
     $regKey = Get-Item $Path -ErrorAction Stop
