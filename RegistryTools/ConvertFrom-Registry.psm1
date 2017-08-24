@@ -17,11 +17,13 @@
 .OUTPUTS
    Output from this cmdlet (if any)
 .NOTES
-   General notes
+   Updates:
+
+   08/23/2017 - Brent Wright - Fixed an issue when registry values are retrieved from the input key. 
+                               The value is now stored without a relative path, indicating the value belongs in the root key.
 .COMPONENT
    The component this cmdlet belongs to
-.ROLE
-   The role this cmdlet belongs to
+
 .FUNCTIONALITY
    The functionality that best describes this cmdlet
 #>
@@ -122,8 +124,17 @@ function ConvertFrom-Registry {
             # Removes the ending "\" in the path, if given in the parameters.
             $regKeyPath = $regKey.pspath -replace "\\$",""
 
-            # Gets the relative path of the value, using the given Path as root.
-            $propKey = Join-path $key.PSPath.substring($regKeyPath.length+1) $prop
+            # Get the root path, based on the input registry key.
+            $rootPath = $key.PSPath.substring($regKeyPath.length+1)
+
+            # If rootpath is blank, just store the property name.
+            if ($rootPath -eq "") {
+                $propKey = $prop
+            
+            # Otherwise, join the relative path with the property name.
+            } else {
+                $propKey = Join-path $key.PSPath.substring($regKeyPath.length+1) $prop
+            }
 
             $propValue = $key.$prop
 

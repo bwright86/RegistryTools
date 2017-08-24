@@ -21,15 +21,25 @@
    . . + Registry Value = Data Value
 
 .EXAMPLE
-   Example of how to use this cmdlet
+    # Making a simple update to a registry key.
+    PS C:\> $update = Get-Item -Path "HKCU:\Software\Microsoft\Internet Explorer\Desktop" | ConvertFrom-Registry
+    PS C:\> $update."General\WallpaperSource" = "$env:USERPROFILE\Pictures\newWallpaper.jpg"
+    PS C:\> $update | Set-RegistryObject -BackupFile c:\temp\
 .EXAMPLE
-   Another example of how to use this cmdlet
+    # Copying one key to another key, with the same values.
+    PS C:\> $update = Get-Item -Path "HKCU:\Software\Key1" | ConvertFrom-Registry
+    PS C:\> $update.PSPath = Join-Path $update.PSParentPath "Key2"
+    PS C:\> $update | Set-RegistryObject -BackupFile c:\temp\
 .INPUTS
    Inputs to this cmdlet (if any)
 .OUTPUTS
    Output from this cmdlet (if any)
 .NOTES
-   General notes
+   Updates:
+
+   08/24/2017 - Brent Wright - Fixed an issue when registry values are being set at the root input key level.
+                               Values can be set at the root key level now.
+                             - Restore commands are better suited now for the different types of registry key kinds.
 .COMPONENT
    The component this cmdlet belongs to
 .ROLE
@@ -78,8 +88,8 @@ function Set-RegistryObject {
             $backupFileCreated = $false
         } else {
             
-            # Check if path is a directory. Directory path ends with a slash. All else is assumed a file.
-            if ($([System.IO.FileInfo]$BackupFile).Name -eq "") {
+            # Check if path is a directory. Assumption is that a file has an extension.
+            if ($([System.IO.FileInfo]$BackupFile).Extension -eq "") {
                 
                 # Add a filename to the backup path.
                 $BackupFileName = "RegistryRestore-$(get-date -Format 'yyyyMMdd_HH.mm.ss').ps1"
@@ -173,29 +183,46 @@ Function CompareRegValueHelper {
         if ($continue) {
 
             # Join the PSPath and the relative path to the property together. Leaving out the registry property name.
-            $regPath = Join-Path $RegistryObject.pspath $(Split-Path $RegObjProperty -Parent)
+            if ($RegObjProperty.contains("\")) {
+                $regPath = Join-Path $RegistryObject.pspath $(Split-Path $RegObjProperty -Parent)
 
-            # Extract the registry property name from the object property.
-            $propertyName = Split-Path $RegObjProperty -Leaf
+                # Extract the registry value name from the object property.
+                $propertyName = Split-Path $RegObjProperty -Leaf
+            
+            # Otherwise, the registry value belongs in the root key.
+            } else {
+                $regPath = $RegistryObject.pspath
+
+                # The registry value name is the object property.
+                $propertyName = $RegObjProperty
+
+            }
+
+            
             
             # Get the current value of the registry property.
             $currentValue = Get-ItemProperty -Path $regPath -Name $propertyName -ErrorAction SilentlyContinue | 
                 Select-Object -ExpandProperty $propertyName
 
             # Capture registry errors on update or creation.
-            $registryErrors = ""
+            $registryErrors = $null
 
             if ($null -eq $currentValue) {
 
                 Write-Verbose "$RegObjProperty property does not exist, and will be created."
 
-                $confirmMessage = "Create $regPath with value `"$($RegistryObject.$RegObjProperty)`""
+                $confirmMessage = "Create $regPath : $propertyName with value `"$($RegistryObject.$RegObjProperty)`""
 
                 # Confirm creating the registry key value.
                 if ($PSCmdlet.ShouldContinue("New-ItemProperty",$confirmMessage,[ref]$yesToAll,[ref]$noToAll)) {
 
                     # Add a remove line to the backup file.
                     $output.RestoreCommands += "Remove-ItemProperty -Path $regPath -Name $propertyName -Force"
+
+                    # Check if registry key exists, otherwise create it.
+                    if (!(Test-Path $regPath)) {
+                        New-Item -Path $regPath -Force:$Force
+                    }
 
                     New-ItemProperty -Path $regPath -Name $propertyName -Value $RegistryObject.$RegObjProperty -Force:$Force -ErrorVariable registryErrors
 
@@ -209,18 +236,40 @@ Function CompareRegValueHelper {
 
                 Write-Verbose "$RegObjProperty property is different, and will be updated."
 
-                $confirmMessage = "Update $regPath`nOldValue: $currentValue`nNew Value: $($RegistryObject.$RegObjProperty)"
+                $confirmMessage = "Update $regPath : $propertyName `nOldValue: $currentValue`nNew Value: $($RegistryObject.$RegObjProperty)"
 
                 # Confirm updating the registry key.
                 if ($PSCmdlet.ShouldContinue("Set-ItemProperty",$confirmMessage,[ref]$yesToAll,[ref]$noToAll)) {
                     
+                    $restoreValue = switch ($currentValue) {
+                        {$currentValue -is [array]} {
+                            Write-Verbose "Restore value is an [array]."
+                            "@(`"$($currentValue -join '`", `"')`")"
+                            break
+                        }
+                        {$currentValue -is [int]} {
+                            Write-Verbose "Restore value is an [int]."
+                            $currentValue
+                            break
+                        }
+                        default {
+                            Write-Verbose "Restore value is something else."
+                            "`"$currentValue`""
+                        }
+                    }
+
                     # Add the restore line to the backup file.
-                    $output.RestoreCommands += "Set-ItemProperty -Path $regPath -Name $propertyName -Value `"$currentValue`"`n`n"
+                    $output.RestoreCommands += "Set-ItemProperty -Path $regPath -Name $propertyName -Value $restoreValue`n`n"
+                    
+                    # Check if registry key exists, otherwise create it.
+                    if (!(Test-Path $regPath)) {
+                        New-Item -Path $regPath -Force:$Force
+                    }
 
                     Set-ItemProperty -Path $regPath -Name $propertyName -Value $RegistryObject.$RegObjProperty -Force:$Force -ErrorVariable registryErrors
 
                     # Add the registry key update to the output.
-                    $output.UpdatedKeys += @{$RegObjProperty = $($RegistryObject.$RegObjProperty)}
+                    $output.UpdatedKeys += @{ $RegObjProperty = $($RegistryObject.$RegObjProperty) }
 
                 } # If: ShouldContinue - Update Registry
 
